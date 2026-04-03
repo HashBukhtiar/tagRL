@@ -135,9 +135,9 @@ def make_ppo(env, n_steps: int, tb_log_dir: str, seed: int, role: str) -> PPO:
     Without it the policy collapses to near-deterministic behaviour before the
     opponent is interesting, and both agents get stuck in a local equilibrium.
 
-    gamma=0.99: long discount horizon is appropriate because catching/evading
-    takes up to MAX_STEPS=200 steps.  A shorter horizon (e.g. 0.95) would
-    undervalue future rewards and make both agents overly myopic.
+    gamma=0.99: long discount horizon is appropriate because episodes run for
+    MAX_STEPS=500 steps.  A shorter horizon (e.g. 0.95) would undervalue future
+    rewards and make both agents overly myopic.
     """
     model = PPO(
         "MlpPolicy",

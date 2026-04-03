@@ -9,16 +9,20 @@ This script implements the two-sided historical evaluation that distinguishes
 genuine co-evolution from policy cycling:
 
   Experiment A — latest runner vs historical taggers:
-    If the runner is genuinely improving, it should survive longer against
-    older (weaker) taggers.  Duration should INCREASE with snapshot age.
+    If the runner is genuinely improving, it should concede fewer tags against
+    older (weaker) taggers.  Mean tags should DECREASE with snapshot age.
 
   Experiment B — latest tagger vs historical runners:
-    If the tagger is genuinely improving, it should catch older (weaker)
-    runners faster.  Duration should DECREASE with snapshot age.
+    If the tagger is genuinely improving, it should score more tags against
+    older (weaker) runners.  Mean tags should INCREASE with snapshot age.
 
 If BOTH trends hold simultaneously, both agents are co-evolving — neither is
 merely exploiting a fixed opponent.  If only one trend holds, one agent has
 dominated and the other stagnated.  Flat trends indicate policy cycling.
+
+Episodes always run for MAX_STEPS=500 steps (they never terminate on a catch),
+so episode duration is a constant and not a useful metric.  The meaningful
+signal is total_tags per episode — how many times roles swapped during a run.
 
 The results are written to CSV for reproducibility.  Figures are generated
 separately (figures/plot_results.py) so the data only needs to be collected
@@ -134,7 +138,10 @@ def run_episodes_runner_vs_tagger(
     Run n_episodes where runner_model is the active agent and tagger_model
     is the frozen opponent (injected via RunnerEnv.set_opponent).
 
-    Returns a list of episode durations (number of steps until done).
+    Returns a list of total_tags per episode (how many times the runner was
+    tagged during the 500-step episode).  Lower values mean the runner evaded
+    better — if the runner is improving, it should concede fewer tags against
+    older, weaker taggers.
 
     Using RunnerEnv here means the runner is the "foreground" agent:
     obs is the runner's observation, and the env internally queries
@@ -143,21 +150,20 @@ def run_episodes_runner_vs_tagger(
     env = RunnerEnv(seed=seed)
     env.set_opponent(tagger_model)
 
-    durations = []
+    tags_list = []
     for ep in range(n_episodes):
         # Use different seeds per episode for varied starting positions,
         # but deterministic given the overall seed so results are reproducible.
         obs, _ = env.reset(seed=seed + ep)
         done   = False
-        steps  = 0
+        info   = {}
         while not done:
             action, _ = runner_model.predict(obs, deterministic=deterministic)
-            obs, _, terminated, truncated, _ = env.step(action)
-            done   = terminated or truncated
-            steps += 1
-        durations.append(steps)
+            obs, _, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+        tags_list.append(info.get("total_tags", 0))
 
-    return durations
+    return tags_list
 
 
 def run_episodes_tagger_vs_runner(
@@ -171,35 +177,37 @@ def run_episodes_tagger_vs_runner(
     Run n_episodes where tagger_model is the active agent and runner_model
     is the frozen opponent (injected via TaggerEnv.set_opponent).
 
-    Returns a list of episode durations.
+    Returns a list of total_tags per episode (how many times the tagger scored
+    a tag during the 500-step episode).  Higher values mean the tagger hunted
+    better — if the tagger is improving, it should score more tags against
+    older, weaker runners.
     """
     env = TaggerEnv(seed=seed)
     env.set_opponent(runner_model)
 
-    durations = []
+    tags_list = []
     for ep in range(n_episodes):
         obs, _ = env.reset(seed=seed + ep)
         done   = False
-        steps  = 0
+        info   = {}
         while not done:
             action, _ = tagger_model.predict(obs, deterministic=deterministic)
-            obs, _, terminated, truncated, _ = env.step(action)
-            done   = terminated or truncated
-            steps += 1
-        durations.append(steps)
+            obs, _, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+        tags_list.append(info.get("total_tags", 0))
 
-    return durations
+    return tags_list
 
 
 def write_csv(path: str, rows: list) -> None:
     """
     Write evaluation results to CSV.
-    Each row: (snapshot_cycle, mean_duration, std_duration, n_episodes).
+    Each row: (snapshot_cycle, mean_tags, std_tags, n_episodes).
     """
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["snapshot_cycle", "mean_duration", "std_duration", "n_episodes"])
+        writer.writerow(["snapshot_cycle", "mean_tags", "std_tags", "n_episodes"])
         for row in rows:
             writer.writerow(row)
     print(f"  Wrote {len(rows)} rows → {path}")
@@ -243,8 +251,8 @@ def main():
 
     # -----------------------------------------------------------------------
     # Experiment A: latest runner vs each historical tagger
-    # Expected result: duration INCREASES as tagger snapshot age increases
-    # (latest runner beats older, weaker taggers for longer)
+    # Expected result: tags conceded DECREASES as tagger snapshot age increases
+    # (latest runner evades older, weaker taggers more successfully)
     # -----------------------------------------------------------------------
     print(f"\n{'='*60}")
     print("Experiment A: latest runner vs historical tagger snapshots")
@@ -256,7 +264,7 @@ def main():
         print(f"  Loading tagger cycle {cycle:4d}...", end=" ", flush=True)
         hist_tagger = load_model(snap_path, dummy_tagger_env)
 
-        durations = run_episodes_runner_vs_tagger(
+        tags = run_episodes_runner_vs_tagger(
             runner_model  = latest_runner,
             tagger_model  = hist_tagger,
             n_episodes    = args.n_episodes,
@@ -264,18 +272,18 @@ def main():
             seed          = args.seed,
         )
 
-        mean_d = float(np.mean(durations))
-        std_d  = float(np.std(durations))
-        print(f"mean_duration={mean_d:.1f} ± {std_d:.1f}")
-        rows_A.append((cycle, mean_d, std_d, args.n_episodes))
+        mean_t = float(np.mean(tags))
+        std_t  = float(np.std(tags))
+        print(f"mean_tags={mean_t:.2f} ± {std_t:.2f}")
+        rows_A.append((cycle, mean_t, std_t, args.n_episodes))
 
     csv_path_A = os.path.join(args.results_dir, "runner_vs_historical_taggers.csv")
     write_csv(csv_path_A, rows_A)
 
     # -----------------------------------------------------------------------
     # Experiment B: latest tagger vs each historical runner
-    # Expected result: duration DECREASES as runner snapshot age increases
-    # (latest tagger catches older, weaker runners faster)
+    # Expected result: tags scored INCREASES as runner snapshot age increases
+    # (latest tagger catches older, weaker runners more often)
     # -----------------------------------------------------------------------
     print(f"\n{'='*60}")
     print("Experiment B: latest tagger vs historical runner snapshots")
@@ -287,7 +295,7 @@ def main():
         print(f"  Loading runner cycle {cycle:4d}...", end=" ", flush=True)
         hist_runner = load_model(snap_path, dummy_runner_env)
 
-        durations = run_episodes_tagger_vs_runner(
+        tags = run_episodes_tagger_vs_runner(
             tagger_model  = latest_tagger,
             runner_model  = hist_runner,
             n_episodes    = args.n_episodes,
@@ -295,10 +303,10 @@ def main():
             seed          = args.seed,
         )
 
-        mean_d = float(np.mean(durations))
-        std_d  = float(np.std(durations))
-        print(f"mean_duration={mean_d:.1f} ± {std_d:.1f}")
-        rows_B.append((cycle, mean_d, std_d, args.n_episodes))
+        mean_t = float(np.mean(tags))
+        std_t  = float(np.std(tags))
+        print(f"mean_tags={mean_t:.2f} ± {std_t:.2f}")
+        rows_B.append((cycle, mean_t, std_t, args.n_episodes))
 
     csv_path_B = os.path.join(args.results_dir, "tagger_vs_historical_runners.csv")
     write_csv(csv_path_B, rows_B)

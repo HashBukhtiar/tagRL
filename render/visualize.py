@@ -59,9 +59,10 @@ BG_COLOR     = (245, 245, 245)
 WALL_COLOR   = (60,  60,  60)
 CELL_COLOR   = (210, 210, 210)
 GRID_COLOR   = (185, 185, 185)
-TAGGER_COLOR = (210, 50,  50)    # red
-RUNNER_COLOR = (50,  100, 210)   # blue
-TEXT_COLOR   = (40,  40,  40)
+TAGGER_COLOR       = (210, 50,  50)    # red — active tagger
+TAGGER_GRACE_COLOR = (180, 100, 200)   # purple — frozen tagger during grace period
+RUNNER_COLOR       = (50,  100, 210)   # blue
+TEXT_COLOR         = (40,  40,  40)
 INFO_BG      = (230, 230, 230)
 
 
@@ -150,11 +151,17 @@ class TagRenderer:
                 pygame.draw.rect(self.screen, color, (x, y, cell_size, cell_size))
                 pygame.draw.rect(self.screen, GRID_COLOR, (x, y, cell_size, cell_size), 1)
 
-        # Draw tagger (filled red circle)
+        # Draw tagger — purple during grace period (frozen), red when active
         tr, tc = int(gs.tagger_pos[0]), int(gs.tagger_pos[1])
         tx = gx0 + tc * cell_size + cell_size // 2
         ty = gy0 + tr * cell_size + cell_size // 2
-        pygame.draw.circle(self.screen, TAGGER_COLOR, (tx, ty), max(4, cell_size // 2 - 4))
+        grace_active = gs.grace_steps_remaining > 0
+        tagger_draw_color = TAGGER_GRACE_COLOR if grace_active else TAGGER_COLOR
+        radius = max(4, cell_size // 2 - 4)
+        pygame.draw.circle(self.screen, tagger_draw_color, (tx, ty), radius)
+        if grace_active:
+            # White outline ring indicates the tagger is frozen
+            pygame.draw.circle(self.screen, (255, 255, 255), (tx, ty), radius + 3, width=2)
         # Label: T
         label_surf = self.font.render("T", True, (255, 255, 255))
         self.screen.blit(label_surf, label_surf.get_rect(center=(tx, ty)))
@@ -171,7 +178,11 @@ class TagRenderer:
         # Info bar
         info_y = h - info_h
         pygame.draw.rect(self.screen, INFO_BG, (0, info_y, w, info_h))
-        info_text = f"Step: {step:3d}/{MAX_STEPS}   {label}"
+        info_text = f"Step: {step:3d}/{MAX_STEPS}  Tags: {gs.total_tags}"
+        if gs.grace_steps_remaining > 0:
+            info_text += f"  [GRACE: {gs.grace_steps_remaining}]"
+        if label:
+            info_text += f"   {label}"
         text_surf = self.font.render(info_text, True, TEXT_COLOR)
         self.screen.blit(text_surf, (MARGIN, info_y + 10))
 
@@ -237,12 +248,7 @@ def render_episode(
             return frames
 
         # Draw current state
-        outcome = ""
-        if gs.tagger_won:
-            outcome = "TAGGED!"
-        elif gs.runner_won:
-            outcome = "Runner escaped!"
-        renderer.draw(gs, step, label=f"{label}  {outcome}")
+        renderer.draw(gs, step, label=label)
 
         if record:
             frames.append(renderer.capture_frame())

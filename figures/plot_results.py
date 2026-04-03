@@ -6,9 +6,9 @@ Usage:
                                    [--output_dir DIR]
 
 Figures produced:
-  1. co_evolution.png / .pdf  — main result: two diverging duration curves
+  1. co_evolution.png / .pdf  — main result: two diverging total-tags curves
   2. training_curves.png / .pdf  — ep_rew_mean for both agents over training
-  3. episode_length.png / .pdf   — ep_len_mean over training
+  3. episode_length.png / .pdf   — ep_len_mean over training (sanity check; always ~500)
 
 All figures are saved as both .png (for presentations/slides) and .pdf (for the
 LaTeX report), following the recommendation in CLAUDE.md to separate data
@@ -91,11 +91,13 @@ def plot_coevolution(results_dir: str, output_dir: str) -> None:
 
     Two curves on one axis:
       - Blue (solid):  latest runner vs historical taggers
-                       → duration should INCREASE (runner improved)
+                       → tags conceded should DECREASE (runner improved, evades more)
       - Red (dashed):  latest tagger vs historical runners
-                       → duration should DECREASE (tagger improved)
+                       → tags scored should INCREASE (tagger improved, catches more)
 
     If both trends hold simultaneously, both agents genuinely co-evolved.
+    Episodes always run for MAX_STEPS=500 steps, so total_tags per episode
+    is the meaningful metric (episode duration is a constant, not useful here).
 
     The shaded bands show ±1 std across evaluation episodes, giving a sense
     of episode-to-episode variability (wide bands = high variance in outcomes).
@@ -113,44 +115,41 @@ def plot_coevolution(results_dir: str, output_dir: str) -> None:
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
 
-    # Curve A: runner vs historical taggers (should increase)
+    # Curve A: runner vs historical taggers (tags conceded should decrease)
     ax.plot(
-        df_A["snapshot_cycle"], df_A["mean_duration"],
+        df_A["snapshot_cycle"], df_A["mean_tags"],
         color=RUNNER_COLOR, linestyle="-", linewidth=2,
-        marker="o", markersize=4, label="Latest runner vs historical tagger",
+        marker="o", markersize=4,
+        label="Latest runner vs historical tagger (tags conceded — lower is better)",
     )
     ax.fill_between(
         df_A["snapshot_cycle"],
-        df_A["mean_duration"] - df_A["std_duration"],
-        df_A["mean_duration"] + df_A["std_duration"],
+        df_A["mean_tags"] - df_A["std_tags"],
+        df_A["mean_tags"] + df_A["std_tags"],
         color=RUNNER_COLOR, alpha=0.15,
     )
 
-    # Curve B: tagger vs historical runners (should decrease)
+    # Curve B: tagger vs historical runners (tags scored should increase)
     ax.plot(
-        df_B["snapshot_cycle"], df_B["mean_duration"],
+        df_B["snapshot_cycle"], df_B["mean_tags"],
         color=TAGGER_COLOR, linestyle="--", linewidth=2,
-        marker="s", markersize=4, label="Latest tagger vs historical runner",
+        marker="s", markersize=4,
+        label="Latest tagger vs historical runner (tags scored — higher is better)",
     )
     ax.fill_between(
         df_B["snapshot_cycle"],
-        df_B["mean_duration"] - df_B["std_duration"],
-        df_B["mean_duration"] + df_B["std_duration"],
+        df_B["mean_tags"] - df_B["std_tags"],
+        df_B["mean_tags"] + df_B["std_tags"],
         color=TAGGER_COLOR, alpha=0.15,
     )
 
     ax.set_xlabel("Historical snapshot (training cycle)")
-    ax.set_ylabel("Mean episode duration (steps)")
-    ax.set_title("Co-evolution: diverging game durations confirm genuine improvement")
+    ax.set_ylabel("Mean tags per episode")
+    ax.set_title("Co-evolution: diverging tag counts confirm genuine improvement")
     ax.legend(loc="center right")
     ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
     ax.grid(axis="y", linestyle=":", linewidth=0.7, alpha=0.7)
     ax.grid(axis="y", which="minor", linestyle=":", linewidth=0.4, alpha=0.4)
-
-    # Reference line at MAX_STEPS = 100 (runner "perfect" evasion)
-    from env.tag_env import MAX_STEPS
-    ax.axhline(MAX_STEPS, color="grey", linestyle=":", linewidth=1, label=f"Max steps ({MAX_STEPS})")
-    ax.legend(loc="center right")
 
     fig.tight_layout()
     save_fig(fig, output_dir, "co_evolution")
@@ -285,12 +284,10 @@ def plot_episode_length(tb_log_dir: str, output_dir: str) -> None:
     """
     ep_len_mean for both agents over training.
 
-    Diagnostic figure.  What to look for:
-      - ep_len → 0 early: tagger trivially winning, check obs/reward.
-      - ep_len → MAX_STEPS always: runner trivially evading, check obs/reward.
-      - ep_len stabilising to an intermediate value: healthy co-evolution.
-    Both agents' ep_len should be approximately equal since they share
-    episodes (each episode ends at the same time for both).
+    Sanity-check figure.  With true-tag role-switching, episodes always run to
+    MAX_STEPS=500 steps (they never terminate on a catch), so both curves should
+    converge to ~500 throughout training.  A flat line at 500 confirms that the
+    termination logic is correct and no early exits are occurring.
     """
     tag = "rollout/ep_len_mean"
 
@@ -317,7 +314,7 @@ def plot_episode_length(tb_log_dir: str, output_dir: str) -> None:
                label=f"Max steps ({MAX_STEPS})")
     ax.set_xlabel("Training steps")
     ax.set_ylabel("Mean episode length (steps)")
-    ax.set_title("Episode length over training")
+    ax.set_title("Episode length over training (sanity check — should be flat at 500)")
     ax.set_ylim(bottom=0)
     ax.legend()
     ax.grid(axis="y", linestyle=":", linewidth=0.7, alpha=0.7)
